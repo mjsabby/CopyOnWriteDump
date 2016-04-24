@@ -4,4 +4,4 @@ CoWDump (expanded as Copy-on-Write Dump) is a tool that uses the [Process Snapsh
 
 Process Snapshotting APIs use [Copy-on-Write](https://en.wikipedia.org/wiki/Copy-on-write) semantics to capture a "snapshot" of the target process. The target process is suspended for the duration of snapshot creation (its latency is usually orders of magnitude lower than capturing a full memory dump) and is then resumed.
 
-Download: [CoWDump.exe](https://github.com/mjsabby/CoWDump/blob/master/CoWDump.exe)
+Download: [CoWDump.exe](https://github.com/mjsabby/CoWDump/raw/master/CoWDump.exe)

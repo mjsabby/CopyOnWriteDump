@@ -223,7 +223,8 @@
                                     MINIDUMP_TYPE.MiniDumpWithHandleData             |
                                     MINIDUMP_TYPE.MiniDumpWithThreadInfo             |
                                     MINIDUMP_TYPE.MiniDumpWithFullMemoryInfo         |
-                                    MINIDUMP_TYPE.MiniDumpWithProcessThreadData      ;
+                                    MINIDUMP_TYPE.MiniDumpWithProcessThreadData      |
+                                    MINIDUMP_TYPE.MiniDumpWithModuleHeaders          ;
 
                 hr = MiniDumpWriteDump(snapshotHandle, pid, fs.SafeFileHandle.DangerousGetHandle(), minidumpFlags, IntPtr.Zero, IntPtr.Zero, callbackParam);
 

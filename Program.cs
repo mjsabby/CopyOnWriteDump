@@ -1,4 +1,4 @@
-﻿namespace CoWDump
+﻿namespace CopyOnWriteDump
 {
     using System;
     using System.Diagnostics;
@@ -75,6 +75,18 @@
         PSS_CREATE_RELEASE_SECTION = 0x80000000
     }
 
+    internal enum PSS_QUERY_INFORMATION_CLASS
+    {
+        PSS_QUERY_PROCESS_INFORMATION = 0,
+        PSS_QUERY_VA_CLONE_INFORMATION = 1,
+        PSS_QUERY_AUXILIARY_PAGES_INFORMATION = 2,
+        PSS_QUERY_VA_SPACE_INFORMATION = 3,
+        PSS_QUERY_HANDLE_INFORMATION = 4,
+        PSS_QUERY_THREAD_INFORMATION = 5,
+        PSS_QUERY_HANDLE_TRACE_INFORMATION = 6,
+        PSS_QUERY_PERFORMANCE_COUNTERS = 7
+    }
+
     [Flags]
     internal enum MINIDUMP_TYPE : int
     {
@@ -106,16 +118,52 @@
     [UnmanagedFunctionPointer(CallingConvention.StdCall)]
     internal delegate BOOL MiniDumpCallback(PVOID CallbackParam, PMINIDUMP_CALLBACK_INPUT CallbackInput, PMINIDUMP_CALLBACK_OUTPUT CallbackOutput);
 
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    delegate DWORD PssCaptureSnapshot(HANDLE ProcessHandle, PSS_CAPTURE_FLAGS CaptureFlags, DWORD ThreadContextFlags, out HPSS SnapshotHandle);
+
     public static class Program
     {
-        [DllImport("kernel32")]
+        [DllImport("kernel32", CallingConvention = CallingConvention.StdCall)]
         internal static extern DWORD PssCaptureSnapshot(HANDLE ProcessHandle, PSS_CAPTURE_FLAGS CaptureFlags, DWORD ThreadContextFlags, out HPSS SnapshotHandle);
 
         [DllImport("kernel32")]
         internal static extern DWORD PssFreeSnapshot(HANDLE ProcessHandle, HPSS SnapshotHandle);
 
+        [DllImport("kernel32")]
+        internal static extern DWORD PssQuerySnapshot(HPSS SnapshotHandle, PSS_QUERY_INFORMATION_CLASS InformationClass, out IntPtr Buffer, DWORD BufferLength);
+
+        [DllImport("kernel32")]
+        internal static extern BOOL CloseHandle(HANDLE hObject);
+
         [DllImport("DbgHelp")]
         internal static extern DWORD MiniDumpWriteDump(HANDLE hProcess, DWORD ProcessId, HANDLE hFile, MINIDUMP_TYPE DumpType, PMINIDUMP_EXCEPTION_INFORMATION ExceptionParam, PMINIDUMP_USER_STREAM_INFORMATION UserStreamParam, PMINIDUMP_CALLBACK_INFORMATION CallbackParam);
+
+        internal static BOOL MiniDumpCallbackMethod2(PVOID param, PMINIDUMP_CALLBACK_INPUT input, PMINIDUMP_CALLBACK_OUTPUT output)
+        {
+            int offset = sizeof(int) + IntPtr.Size;
+
+            var byte0 = Marshal.ReadByte(input + offset);
+            var byte1 = Marshal.ReadByte(input + offset + 1);
+            var byte2 = Marshal.ReadByte(input + offset + 2);
+            var byte3 = Marshal.ReadByte(input + offset + 3);
+
+            var callbackType = (MINIDUMP_CALLBACK_TYPE)((byte3 << 24) | (byte2 << 16) | (byte1 << 8) | byte0);
+            unsafe
+            {
+                var o = (MINIDUMP_CALLBACK_OUTPUT*)output;
+                switch (callbackType)
+                {
+                    case MINIDUMP_CALLBACK_TYPE.IsProcessSnapshotCallback:
+                        o->Status = 1;
+                        return 1;
+                    case MINIDUMP_CALLBACK_TYPE.ReadMemoryFailureCallback:
+                        o->Status = 0;
+                        return 1;
+                    default:
+                        return 1;
+                }
+            }
+        }
 
         internal static BOOL MiniDumpCallbackMethod(PVOID param, PMINIDUMP_CALLBACK_INPUT input, PMINIDUMP_CALLBACK_OUTPUT output)
         {
@@ -135,7 +183,7 @@
         {
             if (args.Length != 2)
             {
-                Console.WriteLine("Usage: CoWDump <PID> <FileName.dmp>");
+                Console.WriteLine("Usage: CopyOnWriteDump <PID> <FileName.dmp>");
                 return -1;
             }
 
@@ -160,13 +208,14 @@
                         PSS_CAPTURE_FLAGS.PSS_CAPTURE_HANDLE_TYPE_SPECIFIC_INFORMATION |
                         PSS_CAPTURE_FLAGS.PSS_CAPTURE_HANDLE_TRACE                     |
                         PSS_CAPTURE_FLAGS.PSS_CAPTURE_THREADS                          |
-                        PSS_CAPTURE_FLAGS.PSS_CAPTURE_THREAD_CONTEXT                   ;
+                        PSS_CAPTURE_FLAGS.PSS_CAPTURE_THREAD_CONTEXT                   |
+                        PSS_CAPTURE_FLAGS.PSS_CREATE_MEASURE_PERFORMANCE               ;
 
             HPSS snapshotHandle;
             Stopwatch sw = new Stopwatch();
 
             sw.Start();
-            DWORD hr = PssCaptureSnapshot(handle, flags, 0, out snapshotHandle);
+            DWORD hr = PssCaptureSnapshot(handle, flags, IntPtr.Size == 8 ? 0x0010001F : 0x0001003F, out snapshotHandle);
             sw.Stop();
 
             if (hr != 0)
@@ -184,7 +233,7 @@
             {
                 var callbackDelegate = new MiniDumpCallback(MiniDumpCallbackMethod);
                 var callbackParam = Marshal.AllocHGlobal(IntPtr.Size * 2);
-                
+
                 unsafe
                 {
                     var ptr = (MINIDUMP_CALLBACK_INFORMATION*)callbackParam;
@@ -192,18 +241,27 @@
                     ptr->CallbackParam = IntPtr.Zero;
                 }
 
-                var minidumpFlags = MINIDUMP_TYPE.MiniDumpWithFullMemory        |
-                                    MINIDUMP_TYPE.MiniDumpWithHandleData        |
-                                    MINIDUMP_TYPE.MiniDumpWithThreadInfo        |
-                                    MINIDUMP_TYPE.MiniDumpWithFullMemoryInfo    |
-                                    MINIDUMP_TYPE.MiniDumpWithProcessThreadData ;
+                var minidumpFlags = MINIDUMP_TYPE.MiniDumpWithDataSegs               |
+                                    MINIDUMP_TYPE.MiniDumpWithTokenInformation       |
+                                    MINIDUMP_TYPE.MiniDumpWithPrivateWriteCopyMemory |
+                                    MINIDUMP_TYPE.MiniDumpWithPrivateReadWriteMemory |
+                                    MINIDUMP_TYPE.MiniDumpWithUnloadedModules        |
+                                    MINIDUMP_TYPE.MiniDumpWithFullMemory             |
+                                    MINIDUMP_TYPE.MiniDumpWithHandleData             |
+                                    MINIDUMP_TYPE.MiniDumpWithThreadInfo             |
+                                    MINIDUMP_TYPE.MiniDumpWithFullMemoryInfo         |
+                                    MINIDUMP_TYPE.MiniDumpWithProcessThreadData      ;
 
                 hr = MiniDumpWriteDump(snapshotHandle, pid, fs.SafeFileHandle.DangerousGetHandle(), minidumpFlags, IntPtr.Zero, IntPtr.Zero, callbackParam);
-                
+
+                IntPtr vaCloneHandle;
+                PssQuerySnapshot(snapshotHandle, PSS_QUERY_INFORMATION_CLASS.PSS_QUERY_VA_CLONE_INFORMATION, out vaCloneHandle, IntPtr.Size);
                 PssFreeSnapshot(Process.GetCurrentProcess().Handle, snapshotHandle);
+                CloseHandle(vaCloneHandle);
+
                 Marshal.FreeHGlobal(callbackParam);
                 GC.KeepAlive(callbackDelegate);
-                
+
                 if (hr == 0)
                 {
                     Console.WriteLine($"MiniDumpWriteDump failed. ({Marshal.GetHRForLastWin32Error()})");

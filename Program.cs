@@ -118,12 +118,9 @@
     [UnmanagedFunctionPointer(CallingConvention.StdCall)]
     internal delegate BOOL MiniDumpCallback(PVOID CallbackParam, PMINIDUMP_CALLBACK_INPUT CallbackInput, PMINIDUMP_CALLBACK_OUTPUT CallbackOutput);
 
-    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-    delegate DWORD PssCaptureSnapshot(HANDLE ProcessHandle, PSS_CAPTURE_FLAGS CaptureFlags, DWORD ThreadContextFlags, out HPSS SnapshotHandle);
-
     public static class Program
     {
-        [DllImport("kernel32", CallingConvention = CallingConvention.StdCall)]
+        [DllImport("kernel32")]
         internal static extern DWORD PssCaptureSnapshot(HANDLE ProcessHandle, PSS_CAPTURE_FLAGS CaptureFlags, DWORD ThreadContextFlags, out HPSS SnapshotHandle);
 
         [DllImport("kernel32")]
@@ -135,35 +132,11 @@
         [DllImport("kernel32")]
         internal static extern BOOL CloseHandle(HANDLE hObject);
 
-        [DllImport("DbgHelp")]
+        [DllImport("kernel32")]
+        internal static extern BOOL GetProcessId(HANDLE hObject);
+
+        [DllImport("dbghelp")]
         internal static extern DWORD MiniDumpWriteDump(HANDLE hProcess, DWORD ProcessId, HANDLE hFile, MINIDUMP_TYPE DumpType, PMINIDUMP_EXCEPTION_INFORMATION ExceptionParam, PMINIDUMP_USER_STREAM_INFORMATION UserStreamParam, PMINIDUMP_CALLBACK_INFORMATION CallbackParam);
-
-        internal static BOOL MiniDumpCallbackMethod2(PVOID param, PMINIDUMP_CALLBACK_INPUT input, PMINIDUMP_CALLBACK_OUTPUT output)
-        {
-            int offset = sizeof(int) + IntPtr.Size;
-
-            var byte0 = Marshal.ReadByte(input + offset);
-            var byte1 = Marshal.ReadByte(input + offset + 1);
-            var byte2 = Marshal.ReadByte(input + offset + 2);
-            var byte3 = Marshal.ReadByte(input + offset + 3);
-
-            var callbackType = (MINIDUMP_CALLBACK_TYPE)((byte3 << 24) | (byte2 << 16) | (byte1 << 8) | byte0);
-            unsafe
-            {
-                var o = (MINIDUMP_CALLBACK_OUTPUT*)output;
-                switch (callbackType)
-                {
-                    case MINIDUMP_CALLBACK_TYPE.IsProcessSnapshotCallback:
-                        o->Status = 1;
-                        return 1;
-                    case MINIDUMP_CALLBACK_TYPE.ReadMemoryFailureCallback:
-                        o->Status = 0;
-                        return 1;
-                    default:
-                        return 1;
-                }
-            }
-        }
 
         internal static BOOL MiniDumpCallbackMethod(PVOID param, PMINIDUMP_CALLBACK_INPUT input, PMINIDUMP_CALLBACK_OUTPUT output)
         {
@@ -256,8 +229,13 @@
 
                 IntPtr vaCloneHandle;
                 PssQuerySnapshot(snapshotHandle, PSS_QUERY_INFORMATION_CLASS.PSS_QUERY_VA_CLONE_INFORMATION, out vaCloneHandle, IntPtr.Size);
+
+                var cloneProcessId = GetProcessId(vaCloneHandle);
+
                 PssFreeSnapshot(Process.GetCurrentProcess().Handle, snapshotHandle);
                 CloseHandle(vaCloneHandle);
+
+                Process.GetProcessById(cloneProcessId).Kill();
 
                 Marshal.FreeHGlobal(callbackParam);
                 GC.KeepAlive(callbackDelegate);

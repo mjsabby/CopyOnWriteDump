@@ -1,6 +1,7 @@
 ﻿namespace CopyOnWriteDump
 {
     using System;
+    using System.ComponentModel;
     using System.Diagnostics;
     using System.IO;
     using System.Runtime.InteropServices;
@@ -236,7 +237,13 @@
                 PssFreeSnapshot(Process.GetCurrentProcess().Handle, snapshotHandle);
                 CloseHandle(vaCloneHandle);
 
-                Process.GetProcessById(cloneProcessId).Kill();
+                try
+                {
+                    Process.GetProcessById(cloneProcessId).Kill();
+                }
+                catch (Win32Exception)
+                {
+                }
 
                 Marshal.FreeHGlobal(callbackParam);
                 GC.KeepAlive(callbackDelegate);
